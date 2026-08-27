@@ -7,6 +7,7 @@ from langchain_huggingface import HuggingFaceEmbeddings, ChatHuggingFace, Huggin
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
+from translator import translate_if_needed
 
 # indexing
 
@@ -29,6 +30,9 @@ try:
     )
 
     transcript = " ".join(chunk.text for chunk in transcript_list)
+
+    # Translator: convert Hindi transcript to English before RAG (do not alter other logic)
+    transcript = translate_if_needed(transcript)
 
 except TranscriptsDisabled:
     print("No caption available for this video")

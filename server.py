@@ -15,6 +15,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
+from translator import translate_if_needed
 
 load_dotenv()
 
@@ -114,6 +115,9 @@ def process_video(req: ProcessRequest):
 
     if not transcript or not transcript.strip():
         raise HTTPException(status_code=404, detail="No caption available for this video")
+
+    # Translator: convert Hindi transcript to English before RAG (do not alter other logic)
+    transcript = translate_if_needed(transcript)
 
     # text splitting
     chunks = splitter.create_documents([transcript])
