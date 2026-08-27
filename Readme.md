@@ -1,8 +1,8 @@
-VideoRAG — YouTube Video Chatbot
+## VideoRAG — YouTube Video Chatbot
 
-A RAG-based chatbot that allows users to ask questions about a YouTube video. The video's transcript is fetched, split into chunks, converted into embeddings, stored in FAISS, and retrieved to provide context-aware answers using an LLM.
+- A RAG-based chatbot that allows users to ask questions about a YouTube video. The video's transcript is fetched, split into chunks, converted into embeddings, stored in FAISS, and retrieved to provide context-aware answers using an LLM.
 
-Features
+## Features
 
 Fetches YouTube video transcripts
 Splits transcript into smaller chunks
@@ -14,8 +14,7 @@ Answers only from the video transcript
 Supports multiple questions in the same session
 Type exit to terminate the chat
 
-
-Tech Stack
+## Tech Stack
 
 Python
 LangChain
