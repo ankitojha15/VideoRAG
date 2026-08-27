@@ -21,6 +21,8 @@ video_id = "Gfr50f6ZBvo"  # only id,not url
 try:
     api = YouTubeTranscriptApi()
 
+    print("Processing video...")
+
     transcript_list = api.fetch(
         video_id,
         languages=["en", "hi"]
@@ -47,6 +49,9 @@ chunks = splitter.create_documents([transcript])
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
+
+
+print("getting ready..")
 
 vector_store = FAISS.from_documents(
     chunks,
@@ -79,9 +84,8 @@ prompt = PromptTemplate(
 
 
 # question
-
 def question():
-    Question = input("Ask...")
+    Question = input("Ask your question (type exit to terminate): ")
     return Question
 
 
@@ -104,8 +108,15 @@ parser = StrOutputParser()
 final_chain = parallel_chain | prompt | llm | parser
 
 
-user_question = question()
+while True:
+    user_question = question()
+    print("-"*30)
+    print("Soution...")
 
-result = final_chain.invoke(user_question)
+    if user_question == "exit":
+        print("Exiting...")
+        break
 
-print(result)
+    result = final_chain.invoke(user_question)
+
+    print(result)
