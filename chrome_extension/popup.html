@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VideoRAG</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>VideoRAG</h1>
+      <div id="videoIdBadge" class="badge hidden"></div>
+    </header>
+
+    <div id="notYoutube" class="state hidden">
+      <p>Open a YouTube video to start.</p>
+      <p class="hint">Navigate to youtube.com/watch?v=...</p>
+    </div>
+
+    <div id="processing" class="state hidden">
+      <p>Processing video...</p>
+      <p>Fetching transcript...</p>
+    </div>
+
+    <div id="error" class="state hidden">
+      <p id="errorMsg"></p>
+      <button id="retryBtn" class="btn">Retry</button>
+    </div>
+
+    <div id="qaSection" class="state hidden">
+      <div id="statusReady" class="ready-msg">✓ Video ready — ask anything</div>
+      <div id="chatHistory" class="chat-history"></div>
+      <div class="input-row">
+        <input id="questionInput" type="text" placeholder="Ask your question..." autocomplete="off">
+        <button id="askBtn" class="btn primary">Ask</button>
+      </div>
+      <div id="askingIndicator" class="hidden"><em>Thinking...</em></div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
