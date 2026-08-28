@@ -1,7 +1,9 @@
 """
 VideoRAG Backend Server
 Keeps existing RAG logic from main.py unchanged, exposed via FastAPI for Chrome Extension.
+Lifecycle: Video → Process → Generate Answer → Discard temporary data
 """
+import gc
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -72,6 +74,66 @@ def format_docs(retrieved_docs):
 # Cache: video_id -> {vector_store, retriever, final_chain}
 video_chains = {}
 
+def _build_rag_chain(video_id: str):
+    """Internal helper to build RAG chain for a video. Keeps RAG logic identical to main.py."""
+    print("Processing video...")
+    print("Fetching transcript...")
+
+    try:
+        api = YouTubeTranscriptApi()
+        transcript_list = api.fetch(
+            video_id,
+            languages=["en", "hi"]
+        )
+        transcript = " ".join(chunk.text for chunk in transcript_list)
+    except TranscriptsDisabled:
+        raise HTTPException(status_code=404, detail="No caption available for this video")
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "transcript" in err_msg or "caption" in err_msg or "disabled" in err_msg or "not found" in err_msg or "no transcript" in err_msg:
+            raise HTTPException(status_code=404, detail="No caption available for this video")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch transcript: {str(e)}")
+
+    if not transcript or not transcript.strip():
+        raise HTTPException(status_code=404, detail="No caption available for this video")
+
+    # Translator: convert Hindi transcript to English before RAG (do not alter other logic)
+    transcript = translate_if_needed(transcript)
+
+    # text splitting
+    chunks = splitter.create_documents([transcript])
+
+    # Lifecycle: Delete the uploaded video after processing (raw transcript source)
+    # Keep only chunks/embeddings needed for retrieval
+    del transcript_list
+    del transcript
+    gc.collect()
+
+    print("getting ready..")
+
+    vector_store = FAISS.from_documents(
+        chunks,
+        embeddings
+    )
+
+    # Release chunks after embeddings/FAISS index built (chunks no longer needed raw)
+    del chunks
+    gc.collect()
+
+    retriever = vector_store.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": 4}
+    )
+
+    parallel_chain = RunnableParallel({
+        "context": retriever | RunnableLambda(format_docs),
+        "question": RunnablePassthrough()
+    })
+
+    final_chain = parallel_chain | prompt | llm | parser
+
+    return vector_store, retriever, final_chain
+
 class ProcessRequest(BaseModel):
     video_id: str
 
@@ -90,59 +152,30 @@ def health_check():
 @app.post("/process")
 def process_video(req: ProcessRequest):
     video_id = req.video_id.strip()
+
     if not video_id:
         raise HTTPException(status_code=400, detail="video_id is required")
 
-    # Process only once per video - return immediately if already cached
+    # Discard previous video's temporary data
+    for old_video_id, chain_data in list(video_chains.items()):
+        if old_video_id != video_id:
+            video_chains.pop(old_video_id, None)
+
+            del chain_data["vector_store"]
+            del chain_data["retriever"]
+            del chain_data["final_chain"]
+
+            gc.collect()
+
+    # Already processed
     if video_id in video_chains:
-        return {"status": "already_processed", "video_id": video_id, "message": "Video already processed"}
+        return {
+            "status": "already_processed",
+            "video_id": video_id,
+            "message": "Video already processed"
+        }
 
-    print("Processing video...")
-    print("Fetching transcript...")
-
-    try:
-        api = YouTubeTranscriptApi()
-        transcript_list = api.fetch(
-            video_id,
-            languages=["en", "hi"]
-        )
-        transcript = " ".join(chunk.text for chunk in transcript_list)
-    except TranscriptsDisabled:
-        raise HTTPException(status_code=404, detail="No caption available for this video")
-    except Exception as e:
-        # youtube_transcript_api raises various errors for not found / disabled
-        err_msg = str(e).lower()
-        if "transcript" in err_msg or "caption" in err_msg or "disabled" in err_msg or "not found" in err_msg or "no transcript" in err_msg:
-            raise HTTPException(status_code=404, detail="No caption available for this video")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch transcript: {str(e)}")
-
-    if not transcript or not transcript.strip():
-        raise HTTPException(status_code=404, detail="No caption available for this video")
-
-    # Translator: convert Hindi transcript to English before RAG (do not alter other logic)
-    transcript = translate_if_needed(transcript)
-
-    # text splitting
-    chunks = splitter.create_documents([transcript])
-
-    print("getting ready..")
-
-    vector_store = FAISS.from_documents(
-        chunks,
-        embeddings
-    )
-
-    retriever = vector_store.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": 4}
-    )
-
-    parallel_chain = RunnableParallel({
-        "context": retriever | RunnableLambda(format_docs),
-        "question": RunnablePassthrough()
-    })
-
-    final_chain = parallel_chain | prompt | llm | parser
+    vector_store, retriever, final_chain = _build_rag_chain(video_id)
 
     video_chains[video_id] = {
         "vector_store": vector_store,
@@ -150,28 +183,46 @@ def process_video(req: ProcessRequest):
         "final_chain": final_chain
     }
 
-    return {"status": "processed", "video_id": video_id, "message": "Video processed successfully"}
+    return {
+        "status": "processed",
+        "video_id": video_id,
+        "message": "Video processed successfully"
+    }
 
 @app.post("/ask")
 def ask_question(req: AskRequest):
     video_id = req.video_id.strip()
     question = req.question.strip()
+
     if not video_id or not question:
-        raise HTTPException(status_code=400, detail="video_id and question are required")
+        raise HTTPException(
+            status_code=400,
+            detail="video_id and question are required"
+        )
+
     if video_id not in video_chains:
-        raise HTTPException(status_code=400, detail="Video not processed yet. Call /process first.")
+        raise HTTPException(
+            status_code=404,
+            detail="Video is not processed"
+        )
 
     final_chain = video_chains[video_id]["final_chain"]
 
-    print("-"*30)
-    print("Soution...")
+    print("-" * 30)
+    print("Solution...")
 
     try:
         result = final_chain.invoke(question)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"LLM error: {str(e)}"
+        )
 
-    return {"answer": result, "video_id": video_id}
+    return {
+        "answer": result,
+        "video_id": video_id
+    }
 
 @app.get("/status/{video_id}")
 def get_status(video_id: str):
