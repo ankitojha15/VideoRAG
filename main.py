@@ -3,7 +3,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings, ChatHuggingFace, HuggingFaceEndpoint,HuggingFacePipeline
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
@@ -17,6 +17,7 @@ llm = ChatGroq(
     model="openai/gpt-oss-120b",
     temperature=0
 )
+
 video_id = "Gfr50f6ZBvo"  # only id,not url
 
 try:
@@ -51,7 +52,10 @@ chunks = splitter.create_documents([transcript])
 # Embedding Generation and storing in vectore store
 
 embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
+    model_name="sentence-transformers/all-MiniLM-L6-v2",
+    model_kwargs={
+        "backend": "onnx"
+    }
 )
 
 
