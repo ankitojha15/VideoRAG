@@ -44,10 +44,8 @@ splitter = RecursiveCharacterTextSplitter(
 )
 
 embeddings = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-small-en-v1.5",
-    model_kwargs={
-        "backend": "onnx"
-    }
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+    
 )
 
 prompt = PromptTemplate(
@@ -226,7 +224,7 @@ def ask_question(req: AskRequest):
 
 
 
-
+    
 
 @app.get("/status/{video_id}")
 def get_status(video_id: str):
