@@ -14,7 +14,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings
+from onnx_embeddings import BGEOnnxEmbeddings
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from translator import translate_if_needed
@@ -43,10 +43,7 @@ splitter = RecursiveCharacterTextSplitter(
     chunk_overlap=200
 )
 
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-    
-)
+embeddings = BGEOnnxEmbeddings()
 
 prompt = PromptTemplate(
     template="""
