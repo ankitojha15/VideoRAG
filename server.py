@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
 from langchain_community.vectorstores import FAISS
@@ -76,16 +76,40 @@ def _build_rag_chain(video_id: str):
 
     try:
         api = YouTubeTranscriptApi()
-        transcript_list = api.fetch(
-            video_id,
-            languages=["en", "hi"]
-        )
+        try:
+            transcript_list = api.fetch(
+                video_id,
+                languages=["en", "hi"]
+            )
+        except NoTranscriptFound:
+            # Video HAS captions, just not in en/hi (e.g. only Tamil/Spanish/etc).
+            # Fall back to any available caption, translating to English if possible.
+            print("en/hi captions not found, trying fallback...")
+            listed = api.list(video_id)
+            for t in listed:
+                print(f"Available: {t.language_code} ({t.language}) generated={t.is_generated} translatable={t.is_translatable}")
+            try:
+                fallback = listed.find_transcript(["en", "hi"])
+            except Exception:
+                # take first manually-created, else first auto-generated
+                try:
+                    fallback = listed.find_manually_created_transcript()
+                except Exception:
+                    fallback = next(iter(listed))
+            if fallback.is_translatable:
+                try:
+                    fallback = fallback.translate("en")
+                except Exception as e:
+                    print(f"Translate-to-en failed, using original: {e}")
+            transcript_list = fallback.fetch()
         transcript = " ".join(chunk.text for chunk in transcript_list)
     except TranscriptsDisabled:
+        print(f"TranscriptsDisabled for {video_id}")
         raise HTTPException(status_code=404, detail="No caption available for this video")
     except Exception as e:
+        print(f"Transcript fetch failed for {video_id}: {type(e).__name__}: {e}")
         err_msg = str(e).lower()
-        if "transcript" in err_msg or "caption" in err_msg or "disabled" in err_msg or "not found" in err_msg or "no transcript" in err_msg:
+        if "transcript" in err_msg or "caption" in err_msg or "disabled" in err_msg or "not found" in err_msg or "no transcript" in err_msg or "translatable" in err_msg or "translation" in err_msg:
             raise HTTPException(status_code=404, detail="No caption available for this video")
         raise HTTPException(status_code=500, detail=f"Failed to fetch transcript: {str(e)}")
 

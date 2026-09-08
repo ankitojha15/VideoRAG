@@ -1,4 +1,4 @@
-const BACKEND_URL = "http://127.0.0.1:8000";;
+const BACKEND_URL = "https://videorag-7swz.onrender.com";
 
 const els = {
   notYoutube: document.getElementById("notYoutube"),
