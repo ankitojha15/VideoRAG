@@ -147,6 +147,19 @@ def _build_rag_chain(video_id: str):
     if not transcript or not transcript.strip():
         raise HTTPException(status_code=404, detail="No caption available for this video")
 
+    del transcript_list
+    gc.collect()
+
+    return _build_chain_from_transcript(transcript)
+
+
+def _build_chain_from_transcript(transcript: str):
+    """Build FAISS + RAG chain from raw transcript text.
+
+    Shared by /process (server-side fetch) and /process_text (captions fetched
+    in the user's browser and sent by the extension — needed because YouTube
+    blocks cloud-server IPs, so server-side fetching fails on hosts like Render).
+    """
     # Translator: convert Hindi transcript to English before RAG (do not alter other logic)
     transcript = translate_if_needed(transcript)
 
@@ -155,7 +168,6 @@ def _build_rag_chain(video_id: str):
 
     # Lifecycle: Delete the uploaded video after processing (raw transcript source)
     # Keep only chunks/embeddings needed for retrieval
-    del transcript_list
     del transcript
     gc.collect()
 
@@ -187,9 +199,30 @@ def _build_rag_chain(video_id: str):
 class ProcessRequest(BaseModel):
     video_id: str
 
+class ProcessTextRequest(BaseModel):
+    video_id: str
+    transcript: str
+
 class AskRequest(BaseModel):
     video_id: str
     question: str
+
+# Safety cap: a malicious/huge transcript could OOM the free-tier server
+# while building embeddings. Transcripts beyond this are truncated.
+MAX_TRANSCRIPT_CHARS = 200000
+
+
+def _evict_other_videos(video_id: str):
+    """Discard previous videos' temporary data (lifecycle: keep only current video)."""
+    for old_video_id, chain_data in list(video_chains.items()):
+        if old_video_id != video_id:
+            video_chains.pop(old_video_id, None)
+
+            del chain_data["vector_store"]
+            del chain_data["retriever"]
+            del chain_data["final_chain"]
+
+            gc.collect()
 
 @app.get("/")
 def health():
@@ -207,15 +240,7 @@ def process_video(req: ProcessRequest):
         raise HTTPException(status_code=400, detail="video_id is required")
 
     # Discard previous video's temporary data
-    for old_video_id, chain_data in list(video_chains.items()):
-        if old_video_id != video_id:
-            video_chains.pop(old_video_id, None)
-
-            del chain_data["vector_store"]
-            del chain_data["retriever"]
-            del chain_data["final_chain"]
-
-            gc.collect()
+    _evict_other_videos(video_id)
 
     # Already processed
     if video_id in video_chains:
@@ -226,6 +251,53 @@ def process_video(req: ProcessRequest):
         }
 
     vector_store, retriever, final_chain = _build_rag_chain(video_id)
+
+    video_chains[video_id] = {
+        "vector_store": vector_store,
+        "retriever": retriever,
+        "final_chain": final_chain
+    }
+
+    return {
+        "status": "processed",
+        "video_id": video_id,
+        "message": "Video processed successfully"
+    }
+
+@app.post("/process_text")
+def process_text(req: ProcessTextRequest):
+    """Build RAG chain from captions fetched in the USER's browser.
+
+    The extension calls this when /process fails because YouTube blocks the
+    server's cloud IP (e.g. on Render). Browser IPs are residential, so the
+    caption download works there; only RAG (embeddings/LLM) runs server-side.
+    """
+    video_id = req.video_id.strip()
+    transcript = (req.transcript or "").strip()
+
+    if not video_id:
+        raise HTTPException(status_code=400, detail="video_id is required")
+    if not transcript:
+        raise HTTPException(status_code=400, detail="transcript is required")
+
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        print(f"Truncating oversized transcript ({len(transcript)} chars)")
+        transcript = transcript[:MAX_TRANSCRIPT_CHARS]
+
+    # Discard previous video's temporary data
+    _evict_other_videos(video_id)
+
+    # Already processed
+    if video_id in video_chains:
+        return {
+            "status": "already_processed",
+            "video_id": video_id,
+            "message": "Video already processed"
+        }
+
+    print(f"Processing browser-provided transcript for {video_id} ({len(transcript)} chars)...")
+
+    vector_store, retriever, final_chain = _build_chain_from_transcript(transcript)
 
     video_chains[video_id] = {
         "vector_store": vector_store,
