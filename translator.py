@@ -3,6 +3,7 @@ Translator module for VideoRAG
 Converts Hindi transcripts to English before RAG processing.
 """
 
+import os
 import re
 from dotenv import load_dotenv
 
@@ -18,9 +19,20 @@ def _get_translator_llm():
     if _translator_llm is None:
         from langchain_google_genai import ChatGoogleGenerativeAI
 
+        # langchain_google_genai reads GOOGLE_API_KEY, but many users
+        # (including this project's .env) store it as GEMINI_API_KEY.
+        # Accept both so translation doesn't crash with "API key not found".
+        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Neither GOOGLE_API_KEY nor GEMINI_API_KEY is set; "
+                "Hindi transcript will be used untranslated."
+            )
+
         _translator_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
-            temperature=0
+            temperature=0,
+            api_key=api_key,
         )
 
     return _translator_llm
@@ -51,7 +63,11 @@ def translate_hindi_to_english(
 
     print("Translating Hindi transcript to English...")
 
-    llm = _get_translator_llm()
+    try:
+        llm = _get_translator_llm()
+    except Exception as e:
+        print(f"Translation skipped (no API key / init failed): {e}")
+        return text
 
     chunks = [
         text[i:i + chunk_size]

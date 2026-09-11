@@ -4,12 +4,13 @@ Keeps existing RAG logic from main.py unchanged, exposed via FastAPI for Chrome 
 Lifecycle: Video → Process → Generate Answer → Discard temporary data
 """
 import gc
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound, IpBlocked, RequestBlocked
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
 from langchain_community.vectorstores import FAISS
@@ -32,18 +33,39 @@ app.add_middleware(
 )
 
 # ---- RAG setup (identical to main.py) ----
+# NOTE: llm/embeddings are lazy-loaded (not at import time) so that:
+# 1. / and /health work on Render even before keys/model are ready
+# 2. a missing GROQ_API_KEY gives a clear 500 error instead of a boot crash (503)
 
-llm = ChatGroq(
-    model="openai/gpt-oss-120b",
-    temperature=0
-)
+_llm = None
+_embeddings = None
+
+
+def get_llm():
+    global _llm
+    if _llm is None:
+        if not os.getenv("GROQ_API_KEY"):
+            raise HTTPException(
+                status_code=500,
+                detail="GROQ_API_KEY is not set on the server. Add it in Render Dashboard -> Environment."
+            )
+        _llm = ChatGroq(
+            model="openai/gpt-oss-120b",
+            temperature=0
+        )
+    return _llm
+
+
+def get_embeddings():
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = BGEOnnxEmbeddings()
+    return _embeddings
 
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=1000,
     chunk_overlap=200
 )
-
-embeddings = BGEOnnxEmbeddings()
 
 prompt = PromptTemplate(
     template="""
@@ -106,6 +128,15 @@ def _build_rag_chain(video_id: str):
     except TranscriptsDisabled:
         print(f"TranscriptsDisabled for {video_id}")
         raise HTTPException(status_code=404, detail="No caption available for this video")
+    except (IpBlocked, RequestBlocked) as e:
+        # NOTE: must come before the generic handler below, because their
+        # message contains "could not retrieve a transcript..." which would
+        # otherwise be misclassified as 404 "No caption".
+        print(f"IP blocked for {video_id}: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="YouTube is blocking requests from the server IP (Render cloud IP blocked). Try a different video or self-host with proxies."
+        )
     except Exception as e:
         print(f"Transcript fetch failed for {video_id}: {type(e).__name__}: {e}")
         err_msg = str(e).lower()
@@ -132,7 +163,7 @@ def _build_rag_chain(video_id: str):
 
     vector_store = FAISS.from_documents(
         chunks,
-        embeddings
+        get_embeddings()
     )
 
     # Release chunks after embeddings/FAISS index built (chunks no longer needed raw)
@@ -149,7 +180,7 @@ def _build_rag_chain(video_id: str):
         "question": RunnablePassthrough()
     })
 
-    final_chain = parallel_chain | prompt | llm | parser
+    final_chain = parallel_chain | prompt | get_llm() | parser
 
     return vector_store, retriever, final_chain
 
@@ -255,4 +286,7 @@ def get_status(video_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Render injects $PORT (default 10000) and requires 0.0.0.0.
+    # 127.0.0.1 + fixed 8000 = "No open ports detected" -> 503 on Render.
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
